@@ -9,7 +9,7 @@ import (
 func TestResolveUserAgentAuto(t *testing.T) {
 	t.Setenv("GMP_TERM", "xterm-256color")
 
-	ua := resolveUserAgent("auto")
+	ua := resolveUserAgent("auto", "")
 	required := []string{
 		"codex-tui/",
 		"; " + runtime.GOARCH + ")",
@@ -27,14 +27,23 @@ func TestResolveUserAgentAutoDefaultsDumbTerm(t *testing.T) {
 	t.Setenv("GMP_TERM", "")
 	t.Setenv("TERM", "dumb")
 
-	ua := resolveUserAgent("auto")
+	ua := resolveUserAgent("auto", "")
 	if !strings.Contains(ua, "xterm-256color") {
 		t.Fatalf("ua %q does not contain xterm-256color", ua)
 	}
 }
 
+func TestResolveUserAgentAutoUsesConfiguredCodexVersion(t *testing.T) {
+	t.Setenv("GMP_TERM", "xterm-256color")
+
+	ua := resolveUserAgent("auto", "0.142.2")
+	if !strings.HasPrefix(ua, "codex-tui/0.142.2 ") {
+		t.Fatalf("ua = %q, want configured codex version", ua)
+	}
+}
+
 func TestResolveUserAgentExplicit(t *testing.T) {
-	if got := resolveUserAgent("custom"); got != "custom" {
+	if got := resolveUserAgent("custom", "0.142.2"); got != "custom" {
 		t.Fatalf("resolveUserAgent() = %q, want custom", got)
 	}
 }

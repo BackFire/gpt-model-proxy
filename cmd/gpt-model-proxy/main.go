@@ -54,7 +54,7 @@ func run() error {
 		ListenAddr:      pickString(setFlags["listen"], flags.ListenAddr, os.Getenv("GMP_LISTEN"), fileCfg.ListenAddr, "127.0.0.1:8787"),
 		UpstreamBaseURL: pickString(setFlags["upstream"], flags.UpstreamBaseURL, os.Getenv("GMP_UPSTREAM"), fileCfg.UpstreamBaseURL),
 		Model:           pickString(setFlags["model"], flags.Model, os.Getenv("GMP_MODEL"), fileCfg.Model),
-		UserAgent:       resolveUserAgent(pickString(setFlags["user-agent"], flags.UserAgent, os.Getenv("GMP_USER_AGENT"), fileCfg.UserAgent)),
+		UserAgent:       resolveUserAgent(pickString(setFlags["user-agent"], flags.UserAgent, os.Getenv("GMP_USER_AGENT"), fileCfg.UserAgent), firstString(os.Getenv("GMP_CODEX_VERSION"), fileCfg.CodexVersion)),
 		ModelField:      pickString(setFlags["model-field"], flags.ModelField, os.Getenv("GMP_MODEL_FIELD"), fileCfg.ModelField, "model"),
 		PreserveHost:    pickBool(setFlags["preserve-host"], flags.PreserveHost, os.Getenv("GMP_PRESERVE_HOST"), fileCfg.PreserveHost, false),
 		MaxRewriteBytes: pickInt64(setFlags["max-rewrite-bytes"], flags.MaxRewriteBytes, os.Getenv("GMP_MAX_REWRITE_BYTES"), fileCfg.MaxRewriteBytes, proxy.DefaultMaxRewriteBytes),
@@ -114,6 +114,7 @@ type fileConfig struct {
 	MaxRewriteBytes int64  `json:"max_rewrite_bytes"`
 	ShutdownTimeout string `json:"shutdown_timeout"`
 	LogLevel        string `json:"log_level"`
+	CodexVersion    string `json:"codex_version"`
 }
 
 type cliFlags struct {

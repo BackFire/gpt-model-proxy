@@ -12,7 +12,7 @@ ExecStart=__HOME__/.local/bin/gpt-model-proxy
 Restart=on-failure
 RestartSec=2s
 Environment=HOME=__HOME__
-Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=__HOME__/.local/bin:/opt/gpt-model-proxy:/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=multi-user.target

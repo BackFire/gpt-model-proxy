@@ -9,16 +9,16 @@ import (
 
 const autoUserAgent = "auto"
 
-func resolveUserAgent(value string) string {
+func resolveUserAgent(value string, codexVersion string) string {
 	value = strings.TrimSpace(value)
 	if !strings.EqualFold(value, autoUserAgent) {
 		return value
 	}
-	return buildAutoUserAgent()
+	return buildAutoUserAgent(codexVersion)
 }
 
-func buildAutoUserAgent() string {
-	codexVersion := detectCodexVersion()
+func buildAutoUserAgent(codexVersion string) string {
+	codexVersion = firstString(codexVersion, detectCodexVersion())
 	osName, osVersion := detectOS()
 	arch := runtime.GOARCH
 	term := detectTerminal()

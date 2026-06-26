@@ -50,6 +50,7 @@ Example fields:
   "upstream_base_url": "https://api.openai.com/v1/",
   "model": "gpt-5.5",
   "user_agent": "auto",
+  "codex_version": "",
   "model_field": "model",
   "preserve_host": false,
   "max_rewrite_bytes": 67108864,
@@ -68,7 +69,7 @@ Set `user_agent` to `auto` to generate a value like:
 codex-tui/0.142.1 (Mac OS 26.5.1; arm64) xterm-256color (codex-tui; 1.0.0)
 ```
 
-`auto` reads `codex --version`, OS version, CPU architecture, and `$TERM`. Use `GMP_TERM` to override terminal detection. If `$TERM` is empty, `dumb`, or `unknown`, the proxy uses `xterm-256color`.
+`auto` reads `codex --version`, OS version, CPU architecture, and `$TERM`. Use `codex_version` or `GMP_CODEX_VERSION` when the service host does not have `codex` on PATH. Use `GMP_TERM` to override terminal detection. If `$TERM` is empty, `dumb`, or `unknown`, the proxy uses `xterm-256color`.
 
 CLI flags override environment variables, and environment variables override the config file.
 
