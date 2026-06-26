@@ -1,0 +1,11 @@
+{
+  "listen_addr": "127.0.0.1:8787",
+  "upstream_base_url": "https://api.openai.com/v1/",
+  "model": "gpt-5.5",
+  "user_agent": "auto",
+  "model_field": "model",
+  "preserve_host": false,
+  "max_rewrite_bytes": 67108864,
+  "shutdown_timeout": "10s",
+  "log_level": "info"
+}
