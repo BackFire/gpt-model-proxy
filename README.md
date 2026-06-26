@@ -88,7 +88,56 @@ GMP_USER_AGENT=auto \
 bin/gpt-model-proxy
 ```
 
-The proxy logs startup, shutdown, skipped rewrites, and upstream forwarding errors to stderr using Go `slog` text output. It has no built-in daemon manager, cron schedule, history file, or notification output; use your process manager if you need persistent background operation.
+The proxy logs startup, shutdown, skipped rewrites, and upstream forwarding errors to stderr using Go `slog` text output. It has no built-in history file or notification output.
+
+## Autostart
+
+Install the binary and config first, then install autostart:
+
+```bash
+go build -o "$HOME/.local/bin/gpt-model-proxy" ./cmd/gpt-model-proxy
+mkdir -p "$HOME/.config/gpt-model-proxy"
+cp config/config.example.json "$HOME/.config/gpt-model-proxy/config.json"
+scripts/install-autostart.sh
+```
+
+On macOS, the script installs:
+
+```text
+$HOME/Library/LaunchAgents/com.backfire.gpt-model-proxy.plist
+```
+
+macOS logs go to:
+
+```text
+$HOME/Library/Logs/gpt-model-proxy/stdout.log
+$HOME/Library/Logs/gpt-model-proxy/stderr.log
+```
+
+Useful macOS commands:
+
+```bash
+launchctl print "gui/$(id -u)/com.backfire.gpt-model-proxy"
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.backfire.gpt-model-proxy.plist"
+```
+
+On Debian, the script installs a system-level systemd service so the proxy starts at boot even when the user has not logged in:
+
+```text
+/etc/systemd/system/gpt-model-proxy.service
+```
+
+The service runs as the user who executed the installer and reads that user's `$HOME/.config/gpt-model-proxy/config.json`.
+
+Run `scripts/install-autostart.sh` as the target user, not with `sudo`; the script calls `sudo` only for writing and enabling the systemd unit.
+
+Useful Debian commands:
+
+```bash
+systemctl status gpt-model-proxy.service
+journalctl -u gpt-model-proxy.service -f
+sudo systemctl disable --now gpt-model-proxy.service
+```
 
 ## Verify
 
@@ -96,6 +145,7 @@ The proxy logs startup, shutdown, skipped rewrites, and upstream forwarding erro
 go test ./...
 go test -race ./...
 go build -o "$HOME/.local/bin/gpt-model-proxy" ./cmd/gpt-model-proxy
+sh -n scripts/install-autostart.sh
 ```
 
 ## Codex Config Example
