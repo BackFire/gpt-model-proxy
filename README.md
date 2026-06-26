@@ -103,8 +103,8 @@ go build -o "$HOME/.local/bin/gpt-model-proxy" ./cmd/gpt-model-proxy
 Point your model provider at the local proxy:
 
 ```toml
-[model_providers.cds]
-name = "cds"
+[model_providers.local_proxy]
+name = "local_proxy"
 base_url = "http://127.0.0.1:8787/v1/"
 wire_api = "responses"
 requires_openai_auth = true
