@@ -80,7 +80,7 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("proxy listening", "listen", cfg.ListenAddr, "upstream", cfg.UpstreamBaseURL)
+		logger.Info("proxy listening", "listen", cfg.ListenAddr, "upstream_configured", cfg.UpstreamBaseURL != "")
 		errCh <- server.ListenAndServe()
 	}()
 

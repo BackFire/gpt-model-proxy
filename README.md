@@ -88,7 +88,7 @@ GMP_USER_AGENT=auto \
 bin/gpt-model-proxy
 ```
 
-The proxy logs startup, shutdown, skipped rewrites, and upstream forwarding errors to stderr using Go `slog` text output. It has no built-in history file or notification output.
+The proxy logs startup, shutdown, skipped rewrites, and upstream forwarding errors to stderr using Go `slog` text output. It does not print the configured upstream URL. It has no built-in history file or notification output.
 
 ## Autostart
 
