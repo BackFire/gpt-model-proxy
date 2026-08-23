@@ -16,18 +16,19 @@ import (
 )
 
 type Proxy struct {
-	cfg      Config
-	upstream *url.URL
-	logger   *slog.Logger
-	proxy    *httputil.ReverseProxy
+	cfg    Config
+	logger *slog.Logger
+	proxy  *httputil.ReverseProxy
+	routes map[string]route
+}
+
+type route struct {
+	model string
+	proxy *httputil.ReverseProxy
 }
 
 func New(cfg Config, logger *slog.Logger) (*Proxy, error) {
 	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	upstream, err := url.Parse(cfg.UpstreamBaseURL)
-	if err != nil {
 		return nil, err
 	}
 	if logger == nil {
@@ -35,11 +36,36 @@ func New(cfg Config, logger *slog.Logger) (*Proxy, error) {
 	}
 
 	p := &Proxy{
-		cfg:      cfg,
-		upstream: upstream,
-		logger:   logger,
+		cfg:    cfg,
+		logger: logger,
+		routes: make(map[string]route, len(cfg.Routes)),
 	}
+	if len(cfg.Routes) == 0 {
+		upstream, err := url.Parse(cfg.UpstreamBaseURL)
+		if err != nil {
+			return nil, err
+		}
+		p.proxy = newReverseProxy(upstream, cfg, "", logger)
+		return p, nil
+	}
+	for model, routeCfg := range cfg.Routes {
+		upstream, err := url.Parse(routeCfg.UpstreamBaseURL)
+		if err != nil {
+			return nil, err
+		}
+		upstreamModel := strings.TrimSpace(routeCfg.Model)
+		if upstreamModel == "" {
+			upstreamModel = model
+		}
+		p.routes[model] = route{
+			model: upstreamModel,
+			proxy: newReverseProxy(upstream, cfg, routeCfg.APIKey, logger),
+		}
+	}
+	return p, nil
+}
 
+func newReverseProxy(upstream *url.URL, cfg Config, apiKey string, logger *slog.Logger) *httputil.ReverseProxy {
 	rp := httputil.NewSingleHostReverseProxy(upstream)
 	originalDirector := rp.Director
 	rp.Director = func(req *http.Request) {
@@ -57,6 +83,9 @@ func New(cfg Config, logger *slog.Logger) (*Proxy, error) {
 		if cfg.UserAgent != "" {
 			req.Header.Set("User-Agent", cfg.UserAgent)
 		}
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
 	}
 	rp.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Del("Alt-Svc")
@@ -67,15 +96,81 @@ func New(cfg Config, logger *slog.Logger) (*Proxy, error) {
 		http.Error(w, "proxy request failed", http.StatusBadGateway)
 	}
 
-	p.proxy = rp
-	return p, nil
+	return rp
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if len(p.routes) != 0 {
+		selected, err := p.routeRequest(req)
+		if err != nil {
+			p.logger.Warn("request routing failed", "method", req.Method, "path", req.URL.Path, "error", err)
+			http.Error(w, err.Error(), routingStatus(err))
+			return
+		}
+		selected.proxy.ServeHTTP(w, req)
+		return
+	}
 	if err := p.rewriteRequest(req); err != nil {
 		p.logger.Warn("request rewrite skipped", "method", req.Method, "path", req.URL.Path, "error", err)
 	}
 	p.proxy.ServeHTTP(w, req)
+}
+
+var (
+	errBodyTooLarge      = errors.New("request body is larger than rewrite limit")
+	errJSONBodyRequired  = errors.New("JSON request body is required for model routing")
+	errModelRequired     = errors.New("request model is required")
+	errUnsupportedCoding = errors.New("unsupported request content encoding")
+)
+
+type unknownModelError struct {
+	model string
+}
+
+func (e unknownModelError) Error() string {
+	return "no route configured for model " + strconv.Quote(e.model)
+}
+
+func routingStatus(err error) int {
+	if errors.Is(err, errBodyTooLarge) {
+		return http.StatusRequestEntityTooLarge
+	}
+	if errors.Is(err, errUnsupportedCoding) {
+		return http.StatusUnsupportedMediaType
+	}
+	return http.StatusBadRequest
+}
+
+func (p *Proxy) routeRequest(req *http.Request) (route, error) {
+	if req.Body == nil || !isJSONRequest(req.Header.Get("Content-Type")) {
+		return route{}, errJSONBodyRequired
+	}
+	if req.ContentLength > p.cfg.MaxRewriteBytes {
+		return route{}, errBodyTooLarge
+	}
+	body, err := readLimited(req.Body, p.cfg.MaxRewriteBytes)
+	if err != nil {
+		if len(body) > 0 {
+			req.Body = prependBody(body, req.Body)
+		}
+		return route{}, err
+	}
+	defer req.Body.Close()
+
+	model, err := readJSONModel(body, req.Header.Get("Content-Encoding"), p.cfg.ModelField)
+	if err != nil {
+		return route{}, err
+	}
+	selected, ok := p.routes[model]
+	if !ok {
+		return route{}, unknownModelError{model: model}
+	}
+	rewritten, _, err := rewriteJSONModel(body, req.Header.Get("Content-Encoding"), p.cfg.ModelField, selected.model)
+	if err != nil {
+		return route{}, err
+	}
+	setRequestBody(req, rewritten)
+	return selected, nil
 }
 
 func (p *Proxy) rewriteRequest(req *http.Request) error {
@@ -119,11 +214,18 @@ func (p *Proxy) rewriteRequest(req *http.Request) error {
 	return nil
 }
 
-var errBodyTooLarge = errors.New("request body is larger than rewrite limit")
-
 func isJSONRequest(contentType string) bool {
 	contentType = strings.ToLower(contentType)
 	return strings.Contains(contentType, "application/json") || strings.Contains(contentType, "+json")
+}
+
+func setRequestBody(req *http.Request, body []byte) {
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
 }
 
 func readLimited(body io.Reader, maxBytes int64) ([]byte, error) {
@@ -193,8 +295,43 @@ func rewriteJSONModel(body []byte, encoding string, field string, model string) 
 		}
 		return compressed.Bytes(), true, nil
 	default:
-		return nil, false, errors.New("unsupported request content encoding")
+		return nil, false, errUnsupportedCoding
 	}
+}
+
+func readJSONModel(body []byte, encoding string, field string) (string, error) {
+	plain := body
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "", "identity":
+	case "gzip":
+		reader, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return "", err
+		}
+		plain, err = io.ReadAll(reader)
+		closeErr := reader.Close()
+		if err != nil {
+			return "", err
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+	default:
+		return "", errUnsupportedCoding
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &payload); err != nil {
+		return "", err
+	}
+	raw, ok := payload[field]
+	if !ok {
+		return "", errModelRequired
+	}
+	var model string
+	if err := json.Unmarshal(raw, &model); err != nil || strings.TrimSpace(model) == "" {
+		return "", errModelRequired
+	}
+	return model, nil
 }
 
 func rewritePlainJSONModel(body []byte, field string, model string) ([]byte, bool, error) {

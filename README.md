@@ -1,12 +1,14 @@
 # gpt-model-proxy
 
-A small Go reverse proxy for OpenAI-compatible APIs. It rewrites request JSON fields and headers before forwarding the request to a configurable upstream.
+A small Go reverse proxy for OpenAI-compatible APIs. It routes requests by model or rewrites request JSON fields and headers before forwarding them to a configurable upstream.
 
 Primary use case: point Codex at this local proxy and replace internal request models such as `codex-auto-review` with a backend-supported model such as `gpt-5.5`.
 
 ## Features
 
 - Rewrites the top-level JSON `model` field.
+- Routes different request models to independent upstreams.
+- Replaces `Authorization` with the selected route's API key.
 - Rewrites `User-Agent`.
 - Supports configurable upstream `base_url`.
 - Streams upstream responses through `httputil.ReverseProxy`.
@@ -47,8 +49,23 @@ Example fields:
 ```json
 {
   "listen_addr": "127.0.0.1:8787",
-  "upstream_base_url": "https://api.openai.com/v1/",
-  "model": "gpt-5.5",
+  "routes": {
+    "gpt-5.6-sol": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "upstream_model": "gpt-5.6-sol",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
+    "gpt-5.6-luna": {
+      "upstream_base_url": "https://chanjike.example/v1/",
+      "upstream_model": "gpt-5.6-luna",
+      "api_key_env": "GMP_CHANJIKE_API_KEY"
+    },
+    "gpt-5.6-terra": {
+      "upstream_base_url": "https://chanjike.example/v1/",
+      "upstream_model": "gpt-5.6-terra",
+      "api_key_env": "GMP_CHANJIKE_API_KEY"
+    }
+  },
   "user_agent": "auto",
   "codex_version": "",
   "model_field": "model",
@@ -60,6 +77,17 @@ Example fields:
 ```
 
 Use `GMP_CONFIG=/path/to/config.json` to use another config file.
+
+In route mode, the incoming top-level `model` selects a route. `upstream_model` defaults to the route name when omitted. Every route requires an API key. Prefer `api_key_env`; the proxy reads that variable at startup and replaces the incoming `Authorization` header before forwarding. A private local config may use `api_key` directly when a service manager cannot provide environment variables. If both are set, `api_key_env` wins. Keep configs containing `api_key` at mode `0600`. Requests with missing or unknown models are rejected with `400` instead of being sent to a fallback upstream.
+
+Export the upstream credentials in the proxy service environment:
+
+```bash
+export GMP_CDS_API_KEY=...
+export GMP_CHANJIKE_API_KEY=...
+```
+
+The legacy single-upstream fields `upstream_base_url` and `model`, plus their CLI and environment variable equivalents, remain supported when `routes` is absent.
 
 For private gateways, fill the real `upstream_base_url` only in your local config file. Do not commit private gateway hosts, tokens, or account-specific upstream URLs.
 
@@ -156,12 +184,13 @@ Point your model provider at the local proxy:
 ```toml
 [model_providers.local_proxy]
 name = "local_proxy"
-base_url = "http://127.0.0.1:8787/v1/"
+base_url = "http://127.0.0.1:8787/"
 wire_api = "responses"
-requires_openai_auth = true
 ```
 
-The proxy forwards requests to `upstream_base_url` or `GMP_UPSTREAM` and rewrites:
+The local provider does not need client-side authentication. The selected route adds its own upstream `Authorization` header.
+
+With `routes` configured, the proxy forwards `gpt-5.6-sol` to its CDS route and `gpt-5.6-luna` or `gpt-5.6-terra` to their chanjike routes. In legacy mode, it forwards requests to `upstream_base_url` or `GMP_UPSTREAM` and rewrites:
 
 ```json
 {"model":"codex-auto-review"}

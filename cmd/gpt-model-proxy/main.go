@@ -54,6 +54,7 @@ func run() error {
 		ListenAddr:      pickString(setFlags["listen"], flags.ListenAddr, os.Getenv("GMP_LISTEN"), fileCfg.ListenAddr, "127.0.0.1:8787"),
 		UpstreamBaseURL: pickString(setFlags["upstream"], flags.UpstreamBaseURL, os.Getenv("GMP_UPSTREAM"), fileCfg.UpstreamBaseURL),
 		Model:           pickString(setFlags["model"], flags.Model, os.Getenv("GMP_MODEL"), fileCfg.Model),
+		Routes:          resolveRoutes(fileCfg.Routes),
 		UserAgent:       resolveUserAgent(pickString(setFlags["user-agent"], flags.UserAgent, os.Getenv("GMP_USER_AGENT"), fileCfg.UserAgent), firstString(os.Getenv("GMP_CODEX_VERSION"), fileCfg.CodexVersion)),
 		ModelField:      pickString(setFlags["model-field"], flags.ModelField, os.Getenv("GMP_MODEL_FIELD"), fileCfg.ModelField, "model"),
 		PreserveHost:    pickBool(setFlags["preserve-host"], flags.PreserveHost, os.Getenv("GMP_PRESERVE_HOST"), fileCfg.PreserveHost, false),
@@ -80,7 +81,7 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("proxy listening", "listen", cfg.ListenAddr, "upstream_configured", cfg.UpstreamBaseURL != "")
+		logger.Info("proxy listening", "listen", cfg.ListenAddr, "upstream_configured", cfg.UpstreamBaseURL != "", "route_count", len(cfg.Routes))
 		errCh <- server.ListenAndServe()
 	}()
 
@@ -105,16 +106,24 @@ func run() error {
 }
 
 type fileConfig struct {
-	ListenAddr      string `json:"listen_addr"`
+	ListenAddr      string                     `json:"listen_addr"`
+	UpstreamBaseURL string                     `json:"upstream_base_url"`
+	Model           string                     `json:"model"`
+	UserAgent       string                     `json:"user_agent"`
+	ModelField      string                     `json:"model_field"`
+	PreserveHost    *bool                      `json:"preserve_host"`
+	MaxRewriteBytes int64                      `json:"max_rewrite_bytes"`
+	ShutdownTimeout string                     `json:"shutdown_timeout"`
+	LogLevel        string                     `json:"log_level"`
+	CodexVersion    string                     `json:"codex_version"`
+	Routes          map[string]fileRouteConfig `json:"routes"`
+}
+
+type fileRouteConfig struct {
 	UpstreamBaseURL string `json:"upstream_base_url"`
-	Model           string `json:"model"`
-	UserAgent       string `json:"user_agent"`
-	ModelField      string `json:"model_field"`
-	PreserveHost    *bool  `json:"preserve_host"`
-	MaxRewriteBytes int64  `json:"max_rewrite_bytes"`
-	ShutdownTimeout string `json:"shutdown_timeout"`
-	LogLevel        string `json:"log_level"`
-	CodexVersion    string `json:"codex_version"`
+	UpstreamModel   string `json:"upstream_model"`
+	APIKeyEnv       string `json:"api_key_env"`
+	APIKey          string `json:"api_key"`
 }
 
 type cliFlags struct {
@@ -142,6 +151,25 @@ func loadFileConfig(path string) (fileConfig, error) {
 		return fileConfig{}, fmt.Errorf("read config %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+func resolveRoutes(routes map[string]fileRouteConfig) map[string]proxy.RouteConfig {
+	if len(routes) == 0 {
+		return nil
+	}
+	resolved := make(map[string]proxy.RouteConfig, len(routes))
+	for model, route := range routes {
+		apiKey := strings.TrimSpace(route.APIKey)
+		if envName := strings.TrimSpace(route.APIKeyEnv); envName != "" {
+			apiKey = strings.TrimSpace(os.Getenv(envName))
+		}
+		resolved[model] = proxy.RouteConfig{
+			UpstreamBaseURL: strings.TrimSpace(route.UpstreamBaseURL),
+			Model:           strings.TrimSpace(route.UpstreamModel),
+			APIKey:          apiKey,
+		}
+	}
+	return resolved
 }
 
 func defaultConfigPath() string {
