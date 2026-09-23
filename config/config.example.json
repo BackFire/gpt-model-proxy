@@ -1,6 +1,26 @@
 {
   "listen_addr": "127.0.0.1:8787",
   "routes": {
+    "gpt-6-astra": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "upstream_model": "gpt-6-astra",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
+    "gpt-6-sol": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "upstream_model": "gpt-6-sol",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
+    "gpt-6-luna": {
+      "upstream_base_url": "https://chanjike.example/v1/",
+      "upstream_model": "gpt-6-luna",
+      "api_key_env": "GMP_CHANJIKE_API_KEY"
+    },
+    "codex-auto-review": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "upstream_model": "codex-auto-review",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
     "gpt-5.6-sol": {
       "upstream_base_url": "https://cds.example/v1/",
       "upstream_model": "gpt-5.6-sol",

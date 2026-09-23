@@ -2,7 +2,7 @@
 
 A small Go reverse proxy for OpenAI-compatible APIs. It routes requests by model or rewrites request JSON fields and headers before forwarding them to a configurable upstream.
 
-Primary use case: point Codex at this local proxy and replace internal request models such as `codex-auto-review` with a backend-supported model such as `gpt-5.5`.
+Primary use case: point Codex at this local proxy and route GPT-6 Astra, Sol, Luna, and internal requests such as `codex-auto-review` to backend-supported models.
 
 ## Features
 
@@ -50,6 +50,22 @@ Example fields:
 {
   "listen_addr": "127.0.0.1:8787",
   "routes": {
+    "gpt-6-astra": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
+    "gpt-6-sol": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
+    "gpt-6-luna": {
+      "upstream_base_url": "https://chanjike.example/v1/",
+      "api_key_env": "GMP_CHANJIKE_API_KEY"
+    },
+    "codex-auto-review": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
     "gpt-5.6-sol": {
       "upstream_base_url": "https://cds.example/v1/",
       "upstream_model": "gpt-5.6-sol",
@@ -98,6 +114,8 @@ codex-tui/0.142.1 (Mac OS 26.5.1; arm64) xterm-256color (codex-tui; 1.0.0)
 ```
 
 `auto` reads `codex --version`, OS version, CPU architecture, and `$TERM`. Use `codex_version` or `GMP_CODEX_VERSION` when the service host does not have `codex` on PATH. Use `GMP_TERM` to override terminal detection. If `$TERM` is empty, `dumb`, or `unknown`, the proxy uses `xterm-256color`.
+
+Some gateways route requests based on User-Agent. Verify model access through the proxy with `user_agent = "auto"`; a direct request with another User-Agent can return `model_not_found` even for an available model. A `/models` listing alone does not prove that a Responses request will succeed.
 
 CLI flags override environment variables, and environment variables override the config file.
 
@@ -179,18 +197,39 @@ sh -n scripts/install-autostart.sh
 
 ## Codex Config Example
 
-Point your model provider at the local proxy:
+Merge [config/codex.example.toml](config/codex.example.toml) into your user-level `~/.codex/config.toml`, preserving existing settings. Provider settings must be in user-level config. The essential provider selection is:
 
 ```toml
+model_provider = "local_proxy"
+model = "gpt-6-astra"
+review_model = "gpt-6-luna"
+
 [model_providers.local_proxy]
 name = "local_proxy"
 base_url = "http://127.0.0.1:8787/"
 wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
 ```
 
 The local provider does not need client-side authentication. The selected route adds its own upstream `Authorization` header.
 
-With `routes` configured, the proxy forwards `gpt-5.6-sol` to its CDS route and `gpt-5.6-luna` or `gpt-5.6-terra` to their chanjike routes. In legacy mode, it forwards requests to `upstream_base_url` or `GMP_UPSTREAM` and rewrites:
+The example includes GPT-6 Astra, Sol, Luna, `codex-auto-review`, and the existing GPT-5.6 routes. Configure every model used by the main session, `/review`, and subagents. `review_model` selects the code-review model; automatic approval review uses `codex-auto-review` and needs its own route. The example forwards that internal model unchanged to a gateway that supports it; otherwise set its `upstream_model` to a model your gateway supports. Verify model availability with your gateway before enabling a route.
+
+The proxy uses HTTP Responses with streaming; disable WebSocket transport for this provider. Model reasoning and other request fields pass through unchanged. After editing the proxy config, restart the service to load the new routes:
+
+```bash
+# macOS
+launchctl kickstart -k "gui/$(id -u)/com.backfire.gpt-model-proxy"
+# Debian
+sudo systemctl restart gpt-model-proxy.service
+```
+
+If Codex shows `Folder access` on every launch, check `projects."/absolute/path".trust_level` in `~/.codex/config.toml`. Opening restricted does not save trust. Start from a trusted project directory, or explicitly mark the intended directory `trusted` after deciding to allow its config, hooks, and rules. This is independent of model routing and command sandbox permissions.
+
+References: [Codex models](https://learn.chatgpt.com/docs/models), [configuration reference](https://developers.openai.com/codex/config-reference).
+
+In legacy mode, the proxy forwards requests to `upstream_base_url` or `GMP_UPSTREAM` and rewrites:
 
 ```json
 {"model":"codex-auto-review"}
