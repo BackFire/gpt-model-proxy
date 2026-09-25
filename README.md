@@ -8,6 +8,7 @@ Primary use case: point Codex at this local proxy and route GPT-6 Astra, Sol, Lu
 
 - Rewrites the top-level JSON `model` field.
 - Routes different request models to independent upstreams.
+- Listens on multiple configured addresses in one process.
 - Replaces `Authorization` with the selected route's API key.
 - Rewrites `User-Agent`.
 - Supports configurable upstream `base_url`.
@@ -48,7 +49,9 @@ Example fields:
 
 ```json
 {
-  "listen_addr": "127.0.0.1:8787",
+  "listen_addrs": [
+    "127.0.0.1:8787"
+  ],
   "routes": {
     "gpt-6-astra": {
       "upstream_base_url": "https://cds.example/v1/",
@@ -92,6 +95,8 @@ Example fields:
 }
 ```
 
+`listen_addrs` creates one listener per address in the same process. To also serve a LAN interface, add its actual address to the list, for example `"192.168.3.1:8787"`. Every configured address must exist on the host when the proxy starts. The legacy `listen_addr` field remains supported; `-listen` and `GMP_LISTEN` accept comma-separated addresses and override the config file. Restrict LAN access to trusted clients: the proxy has no inbound authentication and adds its upstream API key to routed requests.
+
 Use `GMP_CONFIG=/path/to/config.json` to use another config file.
 
 In route mode, the incoming top-level `model` selects a route. `upstream_model` defaults to the route name when omitted. Every route requires an API key. Prefer `api_key_env`; the proxy reads that variable at startup and replaces the incoming `Authorization` header before forwarding. A private local config may use `api_key` directly when a service manager cannot provide environment variables. If both are set, `api_key_env` wins. Keep configs containing `api_key` at mode `0600`. Requests with missing or unknown models are rejected with `400` instead of being sent to a fallback upstream.
@@ -125,7 +130,7 @@ CLI flags override environment variables, and environment variables override the
 gpt-model-proxy
 ```
 
-The same settings can also be provided as environment variables:
+When `routes` is absent, the legacy settings can also be provided as environment variables:
 
 ```bash
 GMP_LISTEN=127.0.0.1:8787 \
@@ -191,7 +196,7 @@ sudo systemctl disable --now gpt-model-proxy.service
 ```bash
 go test ./...
 go test -race ./...
-go build -o "$HOME/.local/bin/gpt-model-proxy" ./cmd/gpt-model-proxy
+go build -o bin/gpt-model-proxy ./cmd/gpt-model-proxy
 sh -n scripts/install-autostart.sh
 ```
 
@@ -244,8 +249,8 @@ to:
 ## Options
 
 ```text
--listen             listen address, default 127.0.0.1:8787
--upstream           upstream base URL, required
+-listen             listen address(es), comma-separated, default 127.0.0.1:8787
+-upstream           upstream base URL, required when routes are absent
 -model              replacement model
 -user-agent         replacement User-Agent
 -model-field        JSON field to rewrite, default model

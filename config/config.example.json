@@ -1,5 +1,7 @@
 {
-  "listen_addr": "127.0.0.1:8787",
+  "listen_addrs": [
+    "127.0.0.1:8787"
+  ],
   "routes": {
     "gpt-6-astra": {
       "upstream_base_url": "https://cds.example/v1/",

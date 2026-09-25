@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,7 +35,7 @@ func run() error {
 	}
 
 	var flags cliFlags
-	flag.StringVar(&flags.ListenAddr, "listen", "127.0.0.1:8787", "listen address")
+	flag.StringVar(&flags.ListenAddr, "listen", "127.0.0.1:8787", "listen address (comma-separated for multiple listeners)")
 	flag.StringVar(&flags.UpstreamBaseURL, "upstream", "", "upstream base URL, for example https://api.openai.com/v1/")
 	flag.StringVar(&flags.Model, "model", "", "replacement model for JSON request bodies")
 	flag.StringVar(&flags.UserAgent, "user-agent", "", "replacement User-Agent header")
@@ -50,8 +51,13 @@ func run() error {
 		setFlags[f.Name] = true
 	})
 
+	listenAddrs, err := resolveListenAddrs(setFlags["listen"], flags.ListenAddr, os.Getenv("GMP_LISTEN"), fileCfg.ListenAddrs, fileCfg.ListenAddr)
+	if err != nil {
+		return err
+	}
+
 	cfg := proxy.Config{
-		ListenAddr:      pickString(setFlags["listen"], flags.ListenAddr, os.Getenv("GMP_LISTEN"), fileCfg.ListenAddr, "127.0.0.1:8787"),
+		ListenAddr:      listenAddrs[0],
 		UpstreamBaseURL: pickString(setFlags["upstream"], flags.UpstreamBaseURL, os.Getenv("GMP_UPSTREAM"), fileCfg.UpstreamBaseURL),
 		Model:           pickString(setFlags["model"], flags.Model, os.Getenv("GMP_MODEL"), fileCfg.Model),
 		Routes:          resolveRoutes(fileCfg.Routes),
@@ -73,17 +79,33 @@ func run() error {
 		return err
 	}
 
-	server := &http.Server{
-		Addr:              cfg.ListenAddr,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
+	listeners, err := openListeners(listenAddrs)
+	if err != nil {
+		return err
 	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		logger.Info("proxy listening", "listen", cfg.ListenAddr, "upstream_configured", cfg.UpstreamBaseURL != "", "route_count", len(cfg.Routes))
-		errCh <- server.ListenAndServe()
+	defer func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
 	}()
+
+	servers := make([]*http.Server, 0, len(listeners))
+	errCh := make(chan error, len(listeners))
+	for i, listener := range listeners {
+		addr := listenAddrs[i]
+		server := &http.Server{
+			Addr:              addr,
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		servers = append(servers, server)
+		go func() {
+			logger.Info("proxy listening", "listen", addr, "upstream_configured", cfg.UpstreamBaseURL != "", "route_count", len(cfg.Routes))
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("serve %s: %w", addr, err)
+			}
+		}()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -93,20 +115,48 @@ func run() error {
 		logger.Info("shutting down", "signal", sig.String())
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
+		if err := shutdownServers(ctx, servers); err != nil {
 			return err
 		}
 		return nil
 	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if shutdownErr := shutdownServers(ctx, servers); shutdownErr != nil {
+			return errors.Join(err, shutdownErr)
 		}
 		return err
 	}
 }
 
+func shutdownServers(ctx context.Context, servers []*http.Server) error {
+	var shutdownErr error
+	for _, server := range servers {
+		if err := server.Shutdown(ctx); err != nil && shutdownErr == nil {
+			shutdownErr = err
+		}
+	}
+	return shutdownErr
+}
+
+func openListeners(addrs []string) ([]net.Listener, error) {
+	listeners := make([]net.Listener, 0, len(addrs))
+	for _, addr := range addrs {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			for _, opened := range listeners {
+				_ = opened.Close()
+			}
+			return nil, fmt.Errorf("listen %s: %w", addr, err)
+		}
+		listeners = append(listeners, listener)
+	}
+	return listeners, nil
+}
+
 type fileConfig struct {
 	ListenAddr      string                     `json:"listen_addr"`
+	ListenAddrs     []string                   `json:"listen_addrs"`
 	UpstreamBaseURL string                     `json:"upstream_base_url"`
 	Model           string                     `json:"model"`
 	UserAgent       string                     `json:"user_agent"`
@@ -151,6 +201,43 @@ func loadFileConfig(path string) (fileConfig, error) {
 		return fileConfig{}, fmt.Errorf("read config %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+func resolveListenAddrs(flagSet bool, flagValue, envValue string, configAddrs []string, legacyConfigAddr string) ([]string, error) {
+	if flagSet {
+		return parseListenAddrs(flagValue)
+	}
+	if strings.TrimSpace(envValue) != "" {
+		return parseListenAddrs(envValue)
+	}
+	if len(configAddrs) > 0 {
+		return normalizeListenAddrs(configAddrs)
+	}
+	return parseListenAddrs(firstString(legacyConfigAddr, "127.0.0.1:8787"))
+}
+
+func parseListenAddrs(value string) ([]string, error) {
+	return normalizeListenAddrs(strings.Split(value, ","))
+}
+
+func normalizeListenAddrs(values []string) ([]string, error) {
+	addrs := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		addr := strings.TrimSpace(value)
+		if addr == "" {
+			return nil, errors.New("listen address must not be empty")
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		addrs = append(addrs, addr)
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("at least one listen address is required")
+	}
+	return addrs, nil
 }
 
 func resolveRoutes(routes map[string]fileRouteConfig) map[string]proxy.RouteConfig {
