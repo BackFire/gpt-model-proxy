@@ -1,6 +1,6 @@
 # Merge into ~/.codex/config.toml; preserve existing settings and trust entries.
 model_provider = "local_proxy"
-model = "gpt-6-astra"
+model = "gpt-6.1-sol"
 review_model = "gpt-6-luna"
 model_reasoning_effort = "medium"
 approval_policy = "on-request"
@@ -15,5 +15,5 @@ requires_openai_auth = false
 supports_websockets = false
 
 [agents]
-default_subagent_model = "gpt-6-luna"
-default_subagent_reasoning_effort = "max"
+default_subagent_model = "gpt-6.1-sol"
+default_subagent_reasoning_effort = "medium"

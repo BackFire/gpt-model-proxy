@@ -2,7 +2,7 @@
 
 A small Go reverse proxy for OpenAI-compatible APIs. It routes requests by model or rewrites request JSON fields and headers before forwarding them to a configurable upstream.
 
-Primary use case: point Codex at this local proxy and route GPT-6 Astra, Sol, Luna, and internal requests such as `codex-auto-review` to backend-supported models.
+Primary use case: point Codex at this local proxy and route GPT-6 Astra, Sol, 6.1 Sol, Luna, and internal requests such as `codex-auto-review` to backend-supported models.
 
 ## Features
 
@@ -10,7 +10,7 @@ Primary use case: point Codex at this local proxy and route GPT-6 Astra, Sol, Lu
 - Routes different request models to independent upstreams.
 - Listens on multiple configured addresses in one process.
 - Replaces `Authorization` with the selected route's API key.
-- Rewrites `User-Agent`.
+- Rewrites non-Codex `User-Agent` headers.
 - Supports configurable upstream `base_url`.
 - Streams upstream responses through `httputil.ReverseProxy`.
 - No third-party runtime dependencies.
@@ -58,6 +58,11 @@ Example fields:
       "api_key_env": "GMP_CDS_API_KEY"
     },
     "gpt-6-sol": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "upstream_model": "gpt-6.1-sol",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
+    "gpt-6.1-sol": {
       "upstream_base_url": "https://cds.example/v1/",
       "api_key_env": "GMP_CDS_API_KEY"
     },
@@ -119,6 +124,8 @@ codex-tui/0.142.1 (Mac OS 26.5.1; arm64) xterm-256color (codex-tui; 1.0.0)
 ```
 
 `auto` reads `codex --version`, OS version, CPU architecture, and `$TERM`. Use `codex_version` or `GMP_CODEX_VERSION` when the service host does not have `codex` on PATH. Use `GMP_TERM` to override terminal detection. If `$TERM` is empty, `dumb`, or `unknown`, the proxy uses `xterm-256color`.
+
+Incoming Codex `User-Agent` headers are preserved; other or missing values use the configured `user_agent`.
 
 Some gateways route requests based on User-Agent. Verify model access through the proxy with `user_agent = "auto"`; a direct request with another User-Agent can return `model_not_found` even for an available model. A `/models` listing alone does not prove that a Responses request will succeed.
 
@@ -206,8 +213,9 @@ Merge [config/codex.example.toml](config/codex.example.toml) into your user-leve
 
 ```toml
 model_provider = "local_proxy"
-model = "gpt-6-astra"
+model = "gpt-6.1-sol"
 review_model = "gpt-6-luna"
+model_reasoning_effort = "medium"
 
 [model_providers.local_proxy]
 name = "local_proxy"
@@ -219,7 +227,7 @@ supports_websockets = false
 
 The local provider does not need client-side authentication. The selected route adds its own upstream `Authorization` header.
 
-The example includes GPT-6 Astra, Sol, Luna, `codex-auto-review`, and the existing GPT-5.6 routes. Configure every model used by the main session, `/review`, and subagents. `review_model` selects the code-review model; automatic approval review uses `codex-auto-review` and needs its own route. The example forwards that internal model unchanged to a gateway that supports it; otherwise set its `upstream_model` to a model your gateway supports. Verify model availability with your gateway before enabling a route.
+The example includes GPT-6 Astra, Sol, 6.1 Sol, Luna, `codex-auto-review`, and the existing GPT-5.6 routes. Configure every model used by the main session, `/review`, and subagents. `review_model` selects the code-review model; automatic approval review uses `codex-auto-review` and needs its own route. The example forwards that internal model unchanged to a gateway that supports it; otherwise set its `upstream_model` to a model your gateway supports. Verify model availability with your gateway before enabling a route.
 
 The proxy uses HTTP Responses with streaming; disable WebSocket transport for this provider. Model reasoning and other request fields pass through unchanged. After editing the proxy config, restart the service to load the new routes:
 

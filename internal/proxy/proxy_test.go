@@ -211,13 +211,14 @@ func TestProxyRewritesModelAndUserAgent(t *testing.T) {
 		ListenAddr:      "127.0.0.1:0",
 		UpstreamBaseURL: upstream.URL + "/v1/",
 		Model:           "gpt-5.5",
-		UserAgent:       "gpt-model-proxy-test",
+		UserAgent:       "codex-tui/0.159.2",
 		ModelField:      "model",
 		MaxRewriteBytes: DefaultMaxRewriteBytes,
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "http://proxy.local/responses", bytes.NewBufferString(`{"model":"codex-auto-review","input":"x"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "OpenAI/Python 2.0")
 	rec := httptest.NewRecorder()
 
 	p.ServeHTTP(rec, req)
@@ -228,8 +229,35 @@ func TestProxyRewritesModelAndUserAgent(t *testing.T) {
 	if gotModel != "gpt-5.5" {
 		t.Fatalf("model = %q, want gpt-5.5", gotModel)
 	}
-	if gotUA != "gpt-model-proxy-test" {
+	if gotUA != "codex-tui/0.159.2" {
 		t.Fatalf("user-agent = %q, want rewrite", gotUA)
+	}
+}
+
+func TestProxyPreservesCodexUserAgent(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_, _ = w.Write([]byte(req.UserAgent()))
+	}))
+	defer upstream.Close()
+
+	p := newTestProxy(t, Config{
+		ListenAddr:      "127.0.0.1:0",
+		UpstreamBaseURL: upstream.URL,
+		UserAgent:       "codex-tui/0.159.2",
+		ModelField:      "model",
+		MaxRewriteBytes: DefaultMaxRewriteBytes,
+	})
+	req := httptest.NewRequest(http.MethodGet, "http://proxy.local/models", nil)
+	req.Header.Set("User-Agent", "codex_cli_rs/0.159.2")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Body.String(); got != "codex_cli_rs/0.159.2" {
+		t.Fatalf("user-agent = %q, want original Codex user-agent", got)
 	}
 }
 

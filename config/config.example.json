@@ -10,7 +10,12 @@
     },
     "gpt-6-sol": {
       "upstream_base_url": "https://cds.example/v1/",
-      "upstream_model": "gpt-6-sol",
+      "upstream_model": "gpt-6.1-sol",
+      "api_key_env": "GMP_CDS_API_KEY"
+    },
+    "gpt-6.1-sol": {
+      "upstream_base_url": "https://cds.example/v1/",
+      "upstream_model": "gpt-6.1-sol",
       "api_key_env": "GMP_CDS_API_KEY"
     },
     "gpt-6-luna": {

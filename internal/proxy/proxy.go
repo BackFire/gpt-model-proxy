@@ -80,7 +80,7 @@ func newReverseProxy(upstream *url.URL, cfg Config, apiKey string, logger *slog.
 		}
 		req.Header.Set("X-Forwarded-Host", req.Host)
 		appendForwardedFor(req)
-		if cfg.UserAgent != "" {
+		if cfg.UserAgent != "" && !isCodexUserAgent(req.UserAgent()) {
 			req.Header.Set("User-Agent", cfg.UserAgent)
 		}
 		if apiKey != "" {
@@ -97,6 +97,11 @@ func newReverseProxy(upstream *url.URL, cfg Config, apiKey string, logger *slog.
 	}
 
 	return rp
+}
+
+func isCodexUserAgent(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(value, "codex/") || strings.HasPrefix(value, "codex-") || strings.HasPrefix(value, "codex_")
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
