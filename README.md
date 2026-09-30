@@ -17,6 +17,8 @@ Primary use case: point Codex at this local proxy and route GPT-6 Astra, Sol, 6.
 
 ## Build
 
+Requires Go 1.26 or newer.
+
 ```bash
 go build -o bin/gpt-model-proxy ./cmd/gpt-model-proxy
 ```
@@ -24,6 +26,7 @@ go build -o bin/gpt-model-proxy ./cmd/gpt-model-proxy
 ## Install
 
 ```bash
+mkdir -p "$HOME/.local/bin"
 go build -o "$HOME/.local/bin/gpt-model-proxy" ./cmd/gpt-model-proxy
 mkdir -p "$HOME/.config/gpt-model-proxy"
 ```
@@ -44,6 +47,8 @@ Start from the checked-in example:
 mkdir -p "$HOME/.config/gpt-model-proxy"
 cp config/config.example.json "$HOME/.config/gpt-model-proxy/config.json"
 ```
+
+For an existing installation, merge the example into your config instead of overwriting it. Before starting the proxy, replace the example upstream URLs and provide each route's credentials.
 
 Example fields:
 
@@ -125,7 +130,7 @@ codex-tui/0.142.1 (Mac OS 26.5.1; arm64) xterm-256color (codex-tui; 1.0.0)
 
 `auto` reads `codex --version`, OS version, CPU architecture, and `$TERM`. Use `codex_version` or `GMP_CODEX_VERSION` when the service host does not have `codex` on PATH. Use `GMP_TERM` to override terminal detection. If `$TERM` is empty, `dumb`, or `unknown`, the proxy uses `xterm-256color`.
 
-Incoming Codex `User-Agent` headers are preserved; other or missing values use the configured `user_agent`.
+Incoming `User-Agent` values beginning with `codex/`, `codex-`, or `codex_` are preserved, including `codex-tui` and `codex_cli_rs`. Detection ignores case and surrounding whitespace. Other or missing values use the configured `user_agent`. An empty or omitted `user_agent` disables rewriting.
 
 Some gateways route requests based on User-Agent. Verify model access through the proxy with `user_agent = "auto"`; a direct request with another User-Agent can return `model_not_found` even for an available model. A `/models` listing alone does not prove that a Responses request will succeed.
 
@@ -151,14 +156,15 @@ The proxy logs startup, shutdown, skipped rewrites, and upstream forwarding erro
 
 ## Autostart
 
-Install the binary and config first, then install autostart:
+Prepare the config and credentials as described above, then install the binary and autostart:
 
 ```bash
+mkdir -p "$HOME/.local/bin"
 go build -o "$HOME/.local/bin/gpt-model-proxy" ./cmd/gpt-model-proxy
-mkdir -p "$HOME/.config/gpt-model-proxy"
-cp config/config.example.json "$HOME/.config/gpt-model-proxy/config.json"
 scripts/install-autostart.sh
 ```
+
+`scripts/install-autostart.sh` writes service configuration and enables autostart. It has no dry-run mode; `sh -n scripts/install-autostart.sh` checks syntax without changing services.
 
 On macOS, the script installs:
 
@@ -223,9 +229,15 @@ base_url = "http://127.0.0.1:8787/"
 wire_api = "responses"
 requires_openai_auth = false
 supports_websockets = false
+
+[agents]
+default_subagent_model = "gpt-6.1-sol"
+default_subagent_reasoning_effort = "medium"
 ```
 
 The local provider does not need client-side authentication. The selected route adds its own upstream `Authorization` header.
+
+The examples select `gpt-6.1-sol` with `medium` reasoning for both the main session and subagents. The `gpt-6-sol` route remains as a compatibility alias and forwards to `gpt-6.1-sol`; the proxy passes the requested reasoning effort through unchanged.
 
 The example includes GPT-6 Astra, Sol, 6.1 Sol, Luna, `codex-auto-review`, and the existing GPT-5.6 routes. Configure every model used by the main session, `/review`, and subagents. `review_model` selects the code-review model; automatic approval review uses `codex-auto-review` and needs its own route. The example forwards that internal model unchanged to a gateway that supports it; otherwise set its `upstream_model` to a model your gateway supports. Verify model availability with your gateway before enabling a route.
 
@@ -237,6 +249,14 @@ launchctl kickstart -k "gui/$(id -u)/com.backfire.gpt-model-proxy"
 # Debian
 sudo systemctl restart gpt-model-proxy.service
 ```
+
+After filling the real upstream settings and restarting the service, verify the configured model with a real Codex request:
+
+```bash
+codex exec --model gpt-6.1-sol "Reply with OK only."
+```
+
+Run this from a trusted project directory. This sends a model request and may incur upstream usage charges. The proxy's Go tests use local test servers and do not verify account access or gateway-specific request requirements.
 
 If Codex shows `Folder access` on every launch, check `projects."/absolute/path".trust_level` in `~/.codex/config.toml`. Opening restricted does not save trust. Start from a trusted project directory, or explicitly mark the intended directory `trusted` after deciding to allow its config, hooks, and rules. This is independent of model routing and command sandbox permissions.
 
