@@ -61,6 +61,7 @@ func run() error {
 		UpstreamBaseURL: pickString(setFlags["upstream"], flags.UpstreamBaseURL, os.Getenv("GMP_UPSTREAM"), fileCfg.UpstreamBaseURL),
 		Model:           pickString(setFlags["model"], flags.Model, os.Getenv("GMP_MODEL"), fileCfg.Model),
 		Routes:          resolveRoutes(fileCfg.Routes),
+		DefaultRoute:    resolveDefaultRoute(fileCfg.DefaultRoute),
 		UserAgent:       resolveUserAgent(pickString(setFlags["user-agent"], flags.UserAgent, os.Getenv("GMP_USER_AGENT"), fileCfg.UserAgent), firstString(os.Getenv("GMP_CODEX_VERSION"), fileCfg.CodexVersion)),
 		ModelField:      pickString(setFlags["model-field"], flags.ModelField, os.Getenv("GMP_MODEL_FIELD"), fileCfg.ModelField, "model"),
 		PreserveHost:    pickBool(setFlags["preserve-host"], flags.PreserveHost, os.Getenv("GMP_PRESERVE_HOST"), fileCfg.PreserveHost, false),
@@ -167,6 +168,7 @@ type fileConfig struct {
 	LogLevel        string                     `json:"log_level"`
 	CodexVersion    string                     `json:"codex_version"`
 	Routes          map[string]fileRouteConfig `json:"routes"`
+	DefaultRoute    *fileRouteConfig           `json:"default_route"`
 }
 
 type fileRouteConfig struct {
@@ -174,6 +176,7 @@ type fileRouteConfig struct {
 	UpstreamModel   string `json:"upstream_model"`
 	APIKeyEnv       string `json:"api_key_env"`
 	APIKey          string `json:"api_key"`
+	OverrideAPIKey  *bool  `json:"override_api_key"`
 }
 
 type cliFlags struct {
@@ -246,17 +249,30 @@ func resolveRoutes(routes map[string]fileRouteConfig) map[string]proxy.RouteConf
 	}
 	resolved := make(map[string]proxy.RouteConfig, len(routes))
 	for model, route := range routes {
-		apiKey := strings.TrimSpace(route.APIKey)
-		if envName := strings.TrimSpace(route.APIKeyEnv); envName != "" {
-			apiKey = strings.TrimSpace(os.Getenv(envName))
-		}
-		resolved[model] = proxy.RouteConfig{
-			UpstreamBaseURL: strings.TrimSpace(route.UpstreamBaseURL),
-			Model:           strings.TrimSpace(route.UpstreamModel),
-			APIKey:          apiKey,
-		}
+		resolved[model] = resolveRoute(route)
 	}
 	return resolved
+}
+
+func resolveDefaultRoute(route *fileRouteConfig) *proxy.RouteConfig {
+	if route == nil {
+		return nil
+	}
+	resolved := resolveRoute(*route)
+	return &resolved
+}
+
+func resolveRoute(route fileRouteConfig) proxy.RouteConfig {
+	apiKey := strings.TrimSpace(route.APIKey)
+	if envName := strings.TrimSpace(route.APIKeyEnv); envName != "" {
+		apiKey = strings.TrimSpace(os.Getenv(envName))
+	}
+	return proxy.RouteConfig{
+		UpstreamBaseURL: strings.TrimSpace(route.UpstreamBaseURL),
+		Model:           strings.TrimSpace(route.UpstreamModel),
+		APIKey:          apiKey,
+		OverrideAPIKey:  route.OverrideAPIKey,
+	}
 }
 
 func defaultConfigPath() string {

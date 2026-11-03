@@ -7,9 +7,9 @@ Primary use case: point Codex at this local proxy and route GPT-6 Astra, Sol, 6.
 ## Features
 
 - Rewrites the top-level JSON `model` field.
-- Routes different request models to independent upstreams.
+- Routes different request models to independent upstreams, with an optional default route for unmatched models.
 - Listens on multiple configured addresses in one process.
-- Replaces `Authorization` with the selected route's API key.
+- Optionally replaces `Authorization` with the selected route's API key.
 - Rewrites non-Codex `User-Agent` headers.
 - Supports configurable upstream `base_url`.
 - Streams upstream responses through `httputil.ReverseProxy`.
@@ -48,7 +48,7 @@ mkdir -p "$HOME/.config/gpt-model-proxy"
 cp config/config.example.json "$HOME/.config/gpt-model-proxy/config.json"
 ```
 
-For an existing installation, merge the example into your config instead of overwriting it. Before starting the proxy, replace the example upstream URLs and provide each route's credentials.
+For an existing installation, merge the example into your config instead of overwriting it. Before starting the proxy, replace the example upstream URL and provide the default route's credentials. The minimal example forwards all model names unchanged to one default upstream; add explicit routes only for exceptions.
 
 Example fields:
 
@@ -57,43 +57,10 @@ Example fields:
   "listen_addrs": [
     "127.0.0.1:8787"
   ],
-  "routes": {
-    "gpt-6-astra": {
-      "upstream_base_url": "https://cds.example/v1/",
-      "api_key_env": "GMP_CDS_API_KEY"
-    },
-    "gpt-6-sol": {
-      "upstream_base_url": "https://cds.example/v1/",
-      "upstream_model": "gpt-6.1-sol",
-      "api_key_env": "GMP_CDS_API_KEY"
-    },
-    "gpt-6.1-sol": {
-      "upstream_base_url": "https://cds.example/v1/",
-      "api_key_env": "GMP_CDS_API_KEY"
-    },
-    "gpt-6-luna": {
-      "upstream_base_url": "https://chanjike.example/v1/",
-      "api_key_env": "GMP_CHANJIKE_API_KEY"
-    },
-    "codex-auto-review": {
-      "upstream_base_url": "https://cds.example/v1/",
-      "api_key_env": "GMP_CDS_API_KEY"
-    },
-    "gpt-5.6-sol": {
-      "upstream_base_url": "https://cds.example/v1/",
-      "upstream_model": "gpt-5.6-sol",
-      "api_key_env": "GMP_CDS_API_KEY"
-    },
-    "gpt-5.6-luna": {
-      "upstream_base_url": "https://chanjike.example/v1/",
-      "upstream_model": "gpt-5.6-luna",
-      "api_key_env": "GMP_CHANJIKE_API_KEY"
-    },
-    "gpt-5.6-terra": {
-      "upstream_base_url": "https://chanjike.example/v1/",
-      "upstream_model": "gpt-5.6-terra",
-      "api_key_env": "GMP_CHANJIKE_API_KEY"
-    }
+  "default_route": {
+    "upstream_base_url": "https://cds.example/v1/",
+    "override_api_key": true,
+    "api_key_env": "GMP_CDS_API_KEY"
   },
   "user_agent": "auto",
   "codex_version": "",
@@ -105,20 +72,38 @@ Example fields:
 }
 ```
 
-`listen_addrs` creates one listener per address in the same process. To also serve a LAN interface, add its actual address to the list, for example `"192.168.3.1:8787"`. Every configured address must exist on the host when the proxy starts. The legacy `listen_addr` field remains supported; `-listen` and `GMP_LISTEN` accept comma-separated addresses and override the config file. Restrict LAN access to trusted clients: the proxy has no inbound authentication and adds its upstream API key to routed requests.
+`listen_addrs` creates one listener per address in the same process. To also serve a LAN interface, add its actual address to the list, for example `"192.168.3.1:8787"`. Every configured address must exist on the host when the proxy starts. The legacy `listen_addr` field remains supported; `-listen` and `GMP_LISTEN` accept comma-separated addresses and override the config file. Restrict LAN access to trusted clients: the proxy has no inbound authentication and can add its upstream API key to routed requests.
 
 Use `GMP_CONFIG=/path/to/config.json` to use another config file.
 
-In route mode, the incoming top-level `model` selects a route. `upstream_model` defaults to the route name when omitted. Every route requires an API key. Prefer `api_key_env`; the proxy reads that variable at startup and replaces the incoming `Authorization` header before forwarding. A private local config may use `api_key` directly when a service manager cannot provide environment variables. If both are set, `api_key_env` wins. Keep configs containing `api_key` at mode `0600`. Requests with missing or unknown models are rejected with `400` instead of being sent to a fallback upstream.
+In route mode, the incoming top-level `model` selects an exact route first. If no route matches, `default_route` is used when configured; otherwise the proxy returns `400`. An explicit route's `upstream_model` defaults to its route name. The default route preserves the requested model unless its own `upstream_model` is set. `default_route` also works without any explicit routes and handles requests without JSON bodies, such as `GET /v1/models`. JSON requests still require a valid nonempty model; malformed JSON, unsupported content encodings, and bodies exceeding the routing limit remain errors.
+
+Both `routes` entries and `default_route` accept `override_api_key`:
+
+- `true`: replace the incoming `Authorization` header with `Bearer <configured key>`, including when the client sends a different key or no key. A nonempty configured key is required.
+- `false`: preserve the client's `Authorization` header, including its absence. No configured key is required; any configured `api_key` or `api_key_env` value is unused for forwarding.
+- Omitted: defaults to `true` for compatibility with existing route configs.
+
+Prefer `api_key_env`; the proxy reads that variable at startup. A private local config may use `api_key` directly when a service manager cannot provide environment variables. If both are set, `api_key_env` wins. Keep configs containing `api_key` at mode `0600`. For example, add this `routes` entry to forward client credentials:
+
+```json
+{
+  "routes": {
+    "gpt-client-auth": {
+      "upstream_base_url": "https://other.example/v1/",
+      "override_api_key": false
+    }
+  }
+}
+```
 
 Export the upstream credentials in the proxy service environment:
 
 ```bash
 export GMP_CDS_API_KEY=...
-export GMP_CHANJIKE_API_KEY=...
 ```
 
-The legacy single-upstream fields `upstream_base_url` and `model`, plus their CLI and environment variable equivalents, remain supported when `routes` is absent.
+The legacy single-upstream fields `upstream_base_url` and `model`, plus their CLI and environment variable equivalents, remain supported when both `routes` and `default_route` are absent.
 
 For private gateways, fill the real `upstream_base_url` only in your local config file. Do not commit private gateway hosts, tokens, or account-specific upstream URLs.
 
@@ -142,7 +127,7 @@ CLI flags override environment variables, and environment variables override the
 gpt-model-proxy
 ```
 
-When `routes` is absent, the legacy settings can also be provided as environment variables:
+When both `routes` and `default_route` are absent, the legacy settings can also be provided as environment variables:
 
 ```bash
 GMP_LISTEN=127.0.0.1:8787 \
@@ -235,11 +220,24 @@ default_subagent_model = "gpt-6.1-sol"
 default_subagent_reasoning_effort = "medium"
 ```
 
-The local provider does not need client-side authentication. The selected route adds its own upstream `Authorization` header.
+With the example's `override_api_key: true`, the local provider does not need client-side authentication. The selected route adds its own upstream `Authorization` header. Routes using `override_api_key: false` require the client to supply any credentials needed by that upstream.
 
-The examples select `gpt-6.1-sol` with `medium` reasoning for both the main session and subagents. The `gpt-6-sol` route remains as a compatibility alias and forwards to `gpt-6.1-sol`; the proxy passes the requested reasoning effort through unchanged.
+The examples select `gpt-6.1-sol` with `medium` reasoning for both the main session and subagents. The default route forwards model names and reasoning effort unchanged; no model aliases are configured.
 
-The example includes GPT-6 Astra, Sol, 6.1 Sol, Luna, `codex-auto-review`, and the existing GPT-5.6 routes. Configure every model used by the main session, `/review`, and subagents. `review_model` selects the code-review model; automatic approval review uses `codex-auto-review` and needs its own route. The example forwards that internal model unchanged to a gateway that supports it; otherwise set its `upstream_model` to a model your gateway supports. Verify model availability with your gateway before enabling a route.
+The default route handles GPT-6 Astra, Sol, 6.1 Sol, Luna, `codex-auto-review`, and other model names without individual entries. `review_model` selects the code-review model; automatic approval review uses `codex-auto-review`. Verify that the default upstream supports each requested model. Add an explicit route with `upstream_model` only when a model needs a different upstream or name, for example:
+
+```json
+{
+  "routes": {
+    "special-model": {
+      "upstream_base_url": "https://other.example/v1/",
+      "upstream_model": "backend-model",
+      "override_api_key": true,
+      "api_key_env": "GMP_OTHER_API_KEY"
+    }
+  }
+}
+```
 
 The proxy uses HTTP Responses with streaming; disable WebSocket transport for this provider. Model reasoning and other request fields pass through unchanged. After editing the proxy config, restart the service to load the new routes:
 
@@ -278,7 +276,7 @@ to:
 
 ```text
 -listen             listen address(es), comma-separated, default 127.0.0.1:8787
--upstream           upstream base URL, required when routes are absent
+-upstream           legacy upstream base URL, required when routes and default_route are absent
 -model              replacement model
 -user-agent         replacement User-Agent
 -model-field        JSON field to rewrite, default model

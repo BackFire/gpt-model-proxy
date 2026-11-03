@@ -402,3 +402,124 @@ func newTestProxy(t *testing.T, cfg Config) *Proxy {
 	}
 	return p
 }
+
+func TestProxyDefaultRouteAndAPIKeyPolicy(t *testing.T) {
+	for _, routeMode := range []string{"explicit", "fallback", "default only"} {
+		for _, policy := range []string{"omitted", "override", "passthrough"} {
+			t.Run(routeMode+"/"+policy, func(t *testing.T) {
+				var override *bool
+				if policy != "omitted" {
+					value := policy == "override"
+					override = &value
+				}
+				newUpstream := func(name string) *httptest.Server {
+					return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+						body, err := io.ReadAll(req.Body)
+						if err != nil {
+							t.Error(err)
+						}
+						w.Header().Set("X-Upstream", name)
+						w.Header().Set("X-Auth", req.Header.Get("Authorization"))
+						w.Header().Set("X-Path", req.URL.Path)
+						_, _ = w.Write(body)
+					}))
+				}
+				explicit := newUpstream("explicit")
+				defer explicit.Close()
+				fallback := newUpstream("fallback")
+				defer fallback.Close()
+				cfg := Config{
+					ListenAddr: "127.0.0.1:0", ModelField: "model", MaxRewriteBytes: DefaultMaxRewriteBytes,
+					DefaultRoute: &RouteConfig{UpstreamBaseURL: fallback.URL + "/v1/", APIKey: "default-key", OverrideAPIKey: override},
+				}
+				if routeMode != "default only" {
+					cfg.Routes = map[string]RouteConfig{
+						"known": {UpstreamBaseURL: explicit.URL + "/v1/", Model: "mapped", APIKey: "route-key", OverrideAPIKey: override},
+					}
+				}
+				p := newTestProxy(t, cfg)
+				model, wantModel, wantUpstream, key := "unknown", "unknown", "fallback", "default-key"
+				if routeMode == "explicit" {
+					model, wantModel, wantUpstream, key = "known", "mapped", "explicit", "route-key"
+				}
+				for _, clientAuth := range []string{"Bearer client-a", "Bearer client-b", ""} {
+					req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"`+model+`","input":"keep"}`))
+					req.Header.Set("Content-Type", "application/json")
+					if clientAuth != "" {
+						req.Header.Set("Authorization", clientAuth)
+					}
+					rec := httptest.NewRecorder()
+					p.ServeHTTP(rec, req)
+					wantAuth := "Bearer " + key
+					if policy == "passthrough" {
+						wantAuth = clientAuth
+					}
+					if rec.Code != http.StatusOK || rec.Header().Get("X-Upstream") != wantUpstream || rec.Header().Get("X-Auth") != wantAuth || rec.Header().Get("X-Path") != "/v1/responses" {
+						t.Fatalf("unexpected response: status=%d headers=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
+					}
+					var payload map[string]string
+					if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+						t.Fatal(err)
+					}
+					if payload["model"] != wantModel || payload["input"] != "keep" {
+						t.Fatalf("unexpected payload: %v", payload)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestProxyDefaultRouteRewriteAndNonJSON(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_, _ = io.Copy(w, req.Body)
+	}))
+	defer upstream.Close()
+	passthrough := false
+	p := newTestProxy(t, Config{
+		ListenAddr: "127.0.0.1:0", ModelField: "model", MaxRewriteBytes: DefaultMaxRewriteBytes,
+		DefaultRoute: &RouteConfig{UpstreamBaseURL: upstream.URL, Model: "replacement", OverrideAPIKey: &passthrough},
+	})
+	for _, tt := range []struct{ contentType, body, want string }{
+		{"application/json", `{"model":"unknown"}`, `{"model":"replacement"}`},
+		{"text/plain", "keep body", "keep body"},
+		{"", "", ""},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(tt.body))
+		req.Header.Set("Content-Type", tt.contentType)
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || rec.Body.String() != tt.want {
+			t.Fatalf("status=%d body=%q, want %q", rec.Code, rec.Body.String(), tt.want)
+		}
+	}
+}
+
+func TestRouteValidationAPIKeyPolicy(t *testing.T) {
+	for _, isDefault := range []bool{false, true} {
+		for _, policy := range []string{"omitted", "override", "passthrough"} {
+			var override *bool
+			if policy != "omitted" {
+				value := policy == "override"
+				override = &value
+			}
+			cfg := Config{ListenAddr: "127.0.0.1:0", ModelField: "model", MaxRewriteBytes: DefaultMaxRewriteBytes}
+			route := RouteConfig{UpstreamBaseURL: "https://upstream.example/v1/", OverrideAPIKey: override}
+			if isDefault {
+				cfg.DefaultRoute = &route
+			} else {
+				cfg.Routes = map[string]RouteConfig{"known": route}
+			}
+			if err := cfg.Validate(); (err == nil) != (policy == "passthrough") {
+				t.Fatalf("default=%v policy=%s: validation error=%v", isDefault, policy, err)
+			}
+			route.UpstreamBaseURL = "ftp://invalid.example"
+			if !isDefault {
+				cfg.Routes["known"] = route
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("invalid route URL accepted")
+			}
+		}
+	}
+}

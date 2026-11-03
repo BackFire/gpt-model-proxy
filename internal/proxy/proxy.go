@@ -16,10 +16,11 @@ import (
 )
 
 type Proxy struct {
-	cfg    Config
-	logger *slog.Logger
-	proxy  *httputil.ReverseProxy
-	routes map[string]route
+	cfg          Config
+	logger       *slog.Logger
+	proxy        *httputil.ReverseProxy
+	routes       map[string]route
+	defaultRoute *route
 }
 
 type route struct {
@@ -40,7 +41,7 @@ func New(cfg Config, logger *slog.Logger) (*Proxy, error) {
 		logger: logger,
 		routes: make(map[string]route, len(cfg.Routes)),
 	}
-	if len(cfg.Routes) == 0 {
+	if len(cfg.Routes) == 0 && cfg.DefaultRoute == nil {
 		upstream, err := url.Parse(cfg.UpstreamBaseURL)
 		if err != nil {
 			return nil, err
@@ -48,21 +49,29 @@ func New(cfg Config, logger *slog.Logger) (*Proxy, error) {
 		p.proxy = newReverseProxy(upstream, cfg, "", logger)
 		return p, nil
 	}
+	if cfg.DefaultRoute != nil {
+		selected := newRoute(*cfg.DefaultRoute, cfg, logger)
+		p.defaultRoute = &selected
+	}
 	for model, routeCfg := range cfg.Routes {
-		upstream, err := url.Parse(routeCfg.UpstreamBaseURL)
-		if err != nil {
-			return nil, err
+		if strings.TrimSpace(routeCfg.Model) == "" {
+			routeCfg.Model = model
 		}
-		upstreamModel := strings.TrimSpace(routeCfg.Model)
-		if upstreamModel == "" {
-			upstreamModel = model
-		}
-		p.routes[model] = route{
-			model: upstreamModel,
-			proxy: newReverseProxy(upstream, cfg, routeCfg.APIKey, logger),
-		}
+		p.routes[model] = newRoute(routeCfg, cfg, logger)
 	}
 	return p, nil
+}
+
+func newRoute(routeCfg RouteConfig, cfg Config, logger *slog.Logger) route {
+	upstream, _ := url.Parse(routeCfg.UpstreamBaseURL) // Validated by Config.Validate.
+	apiKey := ""
+	if routeCfg.overridesAPIKey() {
+		apiKey = routeCfg.APIKey
+	}
+	return route{
+		model: strings.TrimSpace(routeCfg.Model),
+		proxy: newReverseProxy(upstream, cfg, apiKey, logger),
+	}
 }
 
 func newReverseProxy(upstream *url.URL, cfg Config, apiKey string, logger *slog.Logger) *httputil.ReverseProxy {
@@ -105,7 +114,7 @@ func isCodexUserAgent(value string) bool {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if len(p.routes) != 0 {
+	if len(p.routes) != 0 || p.defaultRoute != nil {
 		selected, err := p.routeRequest(req)
 		if err != nil {
 			p.logger.Warn("request routing failed", "method", req.Method, "path", req.URL.Path, "error", err)
@@ -148,6 +157,9 @@ func routingStatus(err error) int {
 
 func (p *Proxy) routeRequest(req *http.Request) (route, error) {
 	if req.Body == nil || !isJSONRequest(req.Header.Get("Content-Type")) {
+		if p.defaultRoute != nil {
+			return *p.defaultRoute, nil
+		}
 		return route{}, errJSONBodyRequired
 	}
 	if req.ContentLength > p.cfg.MaxRewriteBytes {
@@ -168,7 +180,14 @@ func (p *Proxy) routeRequest(req *http.Request) (route, error) {
 	}
 	selected, ok := p.routes[model]
 	if !ok {
-		return route{}, unknownModelError{model: model}
+		if p.defaultRoute == nil {
+			return route{}, unknownModelError{model: model}
+		}
+		selected = *p.defaultRoute
+	}
+	if selected.model == "" {
+		setRequestBody(req, body)
+		return selected, nil
 	}
 	rewritten, _, err := rewriteJSONModel(body, req.Header.Get("Content-Encoding"), p.cfg.ModelField, selected.model)
 	if err != nil {

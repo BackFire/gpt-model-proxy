@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -101,5 +102,32 @@ func TestResolveRoutesReadsAPIKeysFromEnvironment(t *testing.T) {
 	}
 	if routes["gpt-5.6-luna"].APIKey != "chanjike-file-key" {
 		t.Fatalf("luna API key was not resolved")
+	}
+}
+
+func TestLoadDefaultRouteAndOverridePolicy(t *testing.T) {
+	t.Setenv("TEST_DEFAULT_API_KEY", " default-key ")
+	path := t.TempDir() + "/config.json"
+	data := []byte(`{
+		"default_route": {"upstream_base_url":"https://default.example/v1/", "api_key_env":"TEST_DEFAULT_API_KEY", "api_key":"ignored", "override_api_key":true},
+		"routes": {"known":{"upstream_base_url":"https://route.example/v1/", "override_api_key":false}}
+	}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadFileConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := resolveDefaultRoute(cfg.DefaultRoute)
+	if fallback == nil || fallback.APIKey != "default-key" || fallback.OverrideAPIKey == nil || !*fallback.OverrideAPIKey {
+		t.Fatal("default route or override policy was not resolved")
+	}
+	route := resolveRoutes(cfg.Routes)["known"]
+	if route.OverrideAPIKey == nil || *route.OverrideAPIKey || route.APIKey != "" {
+		t.Fatal("passthrough route was not resolved")
+	}
+	if resolveDefaultRoute(nil) != nil {
+		t.Fatal("absent default route must remain absent")
 	}
 }

@@ -13,6 +13,7 @@ type Config struct {
 	UpstreamBaseURL string
 	Model           string
 	Routes          map[string]RouteConfig
+	DefaultRoute    *RouteConfig
 	UserAgent       string
 	ModelField      string
 	PreserveHost    bool
@@ -23,27 +24,42 @@ type RouteConfig struct {
 	UpstreamBaseURL string
 	Model           string
 	APIKey          string
+	OverrideAPIKey  *bool
+}
+
+func (r RouteConfig) overridesAPIKey() bool {
+	return r.OverrideAPIKey == nil || *r.OverrideAPIKey
+}
+
+func (r RouteConfig) validate() error {
+	if err := validateUpstreamURL(r.UpstreamBaseURL); err != nil {
+		return err
+	}
+	if r.overridesAPIKey() && strings.TrimSpace(r.APIKey) == "" {
+		return errors.New("API key is required when override_api_key is enabled")
+	}
+	return nil
 }
 
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.ListenAddr) == "" {
 		return errors.New("listen address is required")
 	}
-	if len(c.Routes) == 0 {
+	if c.DefaultRoute != nil {
+		if err := c.DefaultRoute.validate(); err != nil {
+			return errors.New("default route: " + err.Error())
+		}
+	} else if len(c.Routes) == 0 {
 		if err := validateUpstreamURL(c.UpstreamBaseURL); err != nil {
 			return err
 		}
-	} else {
-		for model, route := range c.Routes {
-			if strings.TrimSpace(model) == "" {
-				return errors.New("route model is required")
-			}
-			if err := validateUpstreamURL(route.UpstreamBaseURL); err != nil {
-				return errors.New("route " + model + ": " + err.Error())
-			}
-			if strings.TrimSpace(route.APIKey) == "" {
-				return errors.New("route " + model + ": API key is required")
-			}
+	}
+	for model, route := range c.Routes {
+		if strings.TrimSpace(model) == "" {
+			return errors.New("route model is required")
+		}
+		if err := route.validate(); err != nil {
+			return errors.New("route " + model + ": " + err.Error())
 		}
 	}
 	if strings.TrimSpace(c.ModelField) == "" {
